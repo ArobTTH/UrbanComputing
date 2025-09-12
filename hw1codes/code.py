@@ -1,94 +1,155 @@
-
-
-# geo_map_air_traffic.py  ——  US 航网地理可视化（用 Igismap）
 from pathlib import Path
-import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point, LineString
-import matplotlib.pyplot as plt
-
-# ---------- 0) 用课程 helper 定位路径 ----------
-from utils import airtraffic_helpers as h
-PKG = Path(h.__file__).resolve().parents[1]                  # -> hw1codes/
-DATA = PKG / "dataset"
-SHAPE_DIR = DATA / "Igismap"                                 # 这里放各州 shp
-T100 = DATA / "288798530_T_T100D_MARKET_ALL_CARRIER.csv"
-MASTER = DATA / "288804893_T_MASTER_CORD.csv"
-OUT = Path("./q4_outputs"); OUT.mkdir(parents=True, exist_ok=True)
-
-# ---------- 1) 底图：合并 Igismap 中所有州界 ----------
-shps = sorted(SHAPE_DIR.glob("*_US_Poly.shp"))
-if not shps:
-    raise FileNotFoundError(f"No *_US_Poly.shp found in {SHAPE_DIR}")
-
-states = gpd.GeoDataFrame(
-    pd.concat([gpd.read_file(s) for s in shps], ignore_index=True),
-    crs=gpd.read_file(shps[0]).crs
-)
-# 统一投影到北美常用的 Albers 等面积（线条更自然，便于叠加）
-states = states.to_crs(epsg=5070)
-
-# ---------- 2) 机场点：MASTER 中的经纬度 ----------
-air = pd.read_csv(MASTER, usecols=["AIRPORT","LATITUDE","LONGITUDE"]).dropna()
-g_air = gpd.GeoDataFrame(
-    air, geometry=gpd.points_from_xy(air["LONGITUDE"], air["LATITUDE"]), crs="EPSG:4326"
-).to_crs(states.crs)
-
-# ---------- 3) 航线：聚合客流并选 Top-K ----------
-K = 300   # 画多少条最繁忙航线（可调，避免太乱）
-t100 = pd.read_csv(T100, usecols=["ORIGIN","DEST","PASSENGERS"]).dropna()
-t100 = t100.groupby(["ORIGIN","DEST"], as_index=False)["PASSENGERS"].sum()
-t100 = t100.sort_values("PASSENGERS", ascending=False).head(K)
-
-# 为画线准备经纬度查找表
-coord = air.set_index("AIRPORT")[["LONGITUDE","LATITUDE"]].dropna()
-
-def make_line(row):
-    if row["ORIGIN"] in coord.index and row["DEST"] in coord.index:
-        x1,y1 = coord.loc[row["ORIGIN"], ["LONGITUDE","LATITUDE"]]
-        x2,y2 = coord.loc[row["DEST"],   ["LONGITUDE","LATITUDE"]]
-        return LineString([(x1,y1),(x2,y2)])
-    return None
-
-t100["geometry"] = t100.apply(make_line, axis=1)
-t100 = t100.dropna(subset=["geometry"])
-g_lines = gpd.GeoDataFrame(t100, geometry="geometry", crs="EPSG:4326").to_crs(states.crs)
-
-# 线宽按客流归一，避免遮挡
-wmax = g_lines["PASSENGERS"].max()
-g_lines["lw"] = 0.2 + 2.8 * (g_lines["PASSENGERS"]/wmax)**0.5   # 开根号让差异更平滑
-
-# ---------- 4) 作图 ----------
-fig, ax = plt.subplots(figsize=(10, 7))
-states.plot(ax=ax, facecolor="#f6f6f6", edgecolor="white", linewidth=0.4)
-g_lines.plot(ax=ax, linewidth=g_lines["lw"], alpha=0.35, color="#2b6cb0")
-g_air.plot(ax=ax, markersize=3, color="black", alpha=0.7)
-
-ax.set_title(f"US Air Traffic — Top {K} Passenger Flows", fontsize=14)
-ax.set_axis_off()
-fig.tight_layout()
-fig.savefig(OUT/"q4_geo_topflows.png", dpi=250)
-plt.show()
-
-# ---------- 5)（可选）标注 Top-10 枢纽（按度数近似） ----------
-# 用无向图近似识别度最高的机场，做小标签
+import json
+import pandas as pd, numpy as np
 import networkx as nx
-Gu = nx.from_pandas_edgelist(t100, "ORIGIN", "DEST", create_using=nx.Graph())
-top_hubs = [n for n,_ in sorted(Gu.degree(), key=lambda x:x[1], reverse=True)[:10]]
-lab_pts = g_air[g_air["AIRPORT"].isin(top_hubs)]
+import matplotlib.pyplot as plt
+from collections import Counter
 
-fig, ax = plt.subplots(figsize=(10, 7))
-states.plot(ax=ax, facecolor="#f6f6f6", edgecolor="white", linewidth=0.4)
-g_lines.plot(ax=ax, linewidth=g_lines["lw"], alpha=0.35, color="#2b6cb0")
-g_air.plot(ax=ax, markersize=2, color="black", alpha=0.6)
-lab_pts.plot(ax=ax, markersize=14, color="#d9534f")  # 红点突出
-for _, r in lab_pts.iterrows():
-    ax.text(r.geometry.x, r.geometry.y, r["AIRPORT"], fontsize=8, ha="left", va="bottom")
+# ---------- 0) Locate dataset via course helper ----------
+from utils import airtraffic_helpers as h
+PKG_DIR = Path(h.__file__).resolve().parents[1]
+DATASET = PKG_DIR / "dataset" / "288798530_T_T100D_MARKET_ALL_CARRIER.csv"
+OUT = Path("./q4_outputs"); OUT.mkdir(parents=True, exist_ok=True)
+print("Using dataset:", DATASET)
 
-ax.set_title(f"US Air Traffic — Top {K} Flows & Top Hubs", fontsize=14)
-ax.set_axis_off()
-fig.tight_layout()
-fig.savefig(OUT/"q4_geo_topflows_hubs.png", dpi=250)
-plt.show()
+# ---------- 1) Read edges & build DIRECTED graph (minimal cleaning) ----------
+df = pd.read_csv(DATASET, usecols=["ORIGIN","DEST"]).dropna()
+df = df[df["ORIGIN"] != df["DEST"]].drop_duplicates()
 
-print("Saved maps to:", (OUT/"q4_geo_topflows.png").resolve(), "and", (OUT/"q4_geo_topflows_hubs.png").resolve())
+G = nx.DiGraph()
+G.add_edges_from(df.itertuples(index=False, name=None))
+
+N, M = G.number_of_nodes(), G.number_of_edges()
+print(f"Nodes={N}, Edges={M}")
+
+# ===================== Q4(a) Connected Components =====================
+wccs = sorted(nx.weakly_connected_components(G), key=len, reverse=True)
+sccs = sorted(nx.strongly_connected_components(G), key=len, reverse=True)
+wcc_sizes = np.array([len(c) for c in wccs])
+scc_sizes = np.array([len(c) for c in sccs])
+giant_wcc = int(wcc_sizes[0]) if len(wcc_sizes) else 0
+giant_scc = int(scc_sizes[0]) if len(scc_sizes) else 0
+
+summary_a = {
+    "Nodes": N, "Edges": M,
+    "Num_WCCs": len(wccs), "Giant_WCC_size": giant_wcc, "Giant_WCC_fraction": round(giant_wcc/N, 6) if N else 0.0,
+    "Num_SCCs": len(sccs), "Giant_SCC_size": giant_scc, "Giant_SCC_fraction": round(giant_scc/N, 6) if N else 0.0
+}
+print(json.dumps(summary_a, indent=2))
+(Path(OUT/"q4a_summary.json")).write_text(json.dumps(summary_a, indent=2))
+
+# --- CCDF on log–log (primary for slides-style heavy-tail inspection) ---
+def plot_ccdf(values, title, outfile):
+    s = np.sort(np.asarray(values))
+    # empirical CCDF: P(X >= x)
+    y = 1.0 - np.arange(1, len(s)+1) / len(s) + (1.0/len(s))
+    fig, ax = plt.subplots(figsize=(5.6,4.2))
+    ax.loglog(s, y, marker='o', linestyle='none', markersize=3, alpha=0.85)
+    ax.set_xlabel("Size"); ax.set_ylabel("CCDF  P(X ≥ x)")
+    ax.set_title(title); ax.grid(True, which="both", ls=":")
+    fig.tight_layout(); fig.savefig(OUT/outfile, dpi=200); plt.show()
+
+plot_ccdf(wcc_sizes, "WCC size CCDF (log–log)", "q4a_wcc_ccdf.png")
+plot_ccdf(scc_sizes, "SCC size CCDF (log–log)", "q4a_scc_ccdf.png")
+
+# --- Discrete size–frequency excluding giant (secondary) ---
+def plot_size_bar_excluding_giant(sizes, title, outfile):
+    tail = [int(x) for x in sizes if x < sizes.max()]
+    freq = Counter(tail)
+    xs = sorted(freq)
+    fig, ax = plt.subplots(figsize=(6,4))
+    if xs:
+        ys = [freq[x] for x in xs]
+        ax.bar(xs, ys, width=0.8, edgecolor="black")
+        step = max(1, (max(xs)-min(xs))//15) if len(xs)>30 else 1
+        ax.set_xticks(range(min(xs), max(xs)+1, step))
+    else:
+        ax.text(0.5, 0.5, "No components besides the giant",
+                ha="center", va="center", transform=ax.transAxes)
+    ax.set_xlabel("Component size"); ax.set_ylabel("Count")
+    ax.set_title(title); ax.grid(axis="y", ls=":")
+    fig.tight_layout(); fig.savefig(OUT/outfile, dpi=200); plt.show()
+
+plot_size_bar_excluding_giant(wcc_sizes, "WCC sizes (excluding giant)", "q4a_wcc_hist.png")
+plot_size_bar_excluding_giant(scc_sizes, "SCC sizes (excluding giant)", "q4a_scc_hist.png")
+
+# ===================== Q4(b) Centrality =====================
+# Directed degree
+in_deg = dict(G.in_degree()); out_deg = dict(G.out_degree())
+
+def plot_hist(vals, title, outfile, logy=False):
+    fig, ax = plt.subplots(figsize=(6,4))
+    ax.hist(vals, bins=40)
+    if logy: ax.set_yscale("log")
+    ax.set_title(title); ax.set_xlabel(title); ax.set_ylabel("Count")
+    ax.grid(axis="y", ls=":"); fig.tight_layout(); fig.savefig(OUT/outfile, dpi=200); plt.show()
+
+plot_hist(list(in_deg.values()),  "In-degree (directed)",  "q4b_in_degree_hist.png",  logy=True)
+plot_hist(list(out_deg.values()), "Out-degree (directed)", "q4b_out_degree_hist.png", logy=True)
+
+# CCDFs on log–log for degrees (primary in slides when examining heavy tails)
+def plot_ccdf_from_counts(vals, title, outfile):
+    arr = np.asarray(vals)
+    s = np.sort(arr)
+    y = 1.0 - np.arange(1, len(s)+1) / len(s) + (1.0/len(s))
+    fig, ax = plt.subplots(figsize=(5.6,4.2))
+    ax.loglog(s, y, marker='o', linestyle='none', markersize=3, alpha=0.85)
+    ax.set_xlabel(title); ax.set_ylabel("CCDF  P(X ≥ x)")
+    ax.set_title(title + " – CCDF (log–log)")
+    ax.grid(True, which="both", ls=":")
+    fig.tight_layout(); fig.savefig(OUT/outfile, dpi=200); plt.show()
+
+plot_ccdf_from_counts(list(in_deg.values()),  "In-degree",        "q4b_in_degree_ccdf.png")
+plot_ccdf_from_counts(list(out_deg.values()), "Out-degree",       "q4b_out_degree_ccdf.png")
+
+Gu = G.to_undirected()
+undeg_vals = [d for _, d in Gu.degree()]
+plot_ccdf_from_counts(undeg_vals,              "Undirected degree","q4b_undeg_ccdf.png")
+
+# Undirected centralities (as in class)
+deg_cent = nx.degree_centrality(Gu)
+bet_cent = nx.betweenness_centrality(Gu, k=200, seed=42, normalized=True)
+
+# Histogram with log-y for betweenness (secondary)
+plot_hist(list(bet_cent.values()), "Betweenness (undirected, sampled)", "q4b_bet_hist_logy.png", logy=True)
+
+# CCDF (log–log) for betweenness (primary)
+plot_ccdf_from_counts(list(bet_cent.values()), "Betweenness (undirected, sampled)", "q4b_bet_ccdf.png")
+
+# Top-10 betweenness bar (who are the transfer hubs?)
+top10_bet = sorted(bet_cent.items(), key=lambda x: x[1], reverse=True)[:10]
+pd.DataFrame(top10_bet, columns=["airport","score"]).to_csv(OUT/"q4b_top_bet.csv", index=False)
+fig, ax = plt.subplots(figsize=(7,4))
+ax.bar([a for a,_ in top10_bet], [s for _,s in top10_bet], edgecolor="black")
+ax.set_ylabel("Betweenness"); ax.set_title("Top-10 betweenness (undirected)")
+ax.set_xticklabels([a for a,_ in top10_bet], rotation=45, ha="right")
+ax.grid(axis="y", ls=":"); fig.tight_layout(); fig.savefig(OUT/"q4b_top_bet_bar.png", dpi=200); plt.show()
+
+# ===================== Q4(c) Clustering =====================
+local_C = nx.clustering(Gu)
+avg_C = nx.average_clustering(Gu)
+trans = nx.transitivity(Gu)
+summary_c = {"average_clustering": round(avg_C, 4), "transitivity": round(trans, 4)}
+print(json.dumps(summary_c, indent=2))
+(Path(OUT/"q4c_summary.json")).write_text(json.dumps(summary_c, indent=2))
+
+# Histogram for C_v > 0
+fig, ax = plt.subplots(figsize=(6,4))
+ax.hist([v for v in local_C.values() if v>0], bins=40)
+ax.set_title("Clustering coefficient distribution (C_v>0)")
+ax.set_xlabel("C_v"); ax.set_ylabel("Count")
+ax.grid(axis="y", ls=":"); fig.tight_layout(); fig.savefig(OUT/"q4c_clustering_hist.png", dpi=200); plt.show()
+
+# Degree vs clustering with log-x (hub-and-spoke signature clearer)
+deg_u = dict(Gu.degree())
+x = [deg_u[n] for n in Gu.nodes()]
+y = [local_C[n] for n in Gu.nodes()]
+fig, ax = plt.subplots(figsize=(6,4))
+ax.scatter(x, y, s=6, alpha=0.4)
+ax.set_xscale("log")  # <— log-x makes the decay pattern more visible
+ax.set_xlabel("Degree (undirected, log scale)"); ax.set_ylabel("Local clustering C_v")
+ax.set_title("Degree vs. clustering (log-x)")
+ax.grid(True, which="both", ls=":")
+fig.tight_layout(); fig.savefig(OUT/"q4c_deg_vs_cluster_logx.png", dpi=200); plt.show()
+
+print("All outputs saved to:", OUT.resolve())
