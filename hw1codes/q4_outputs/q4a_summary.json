@@ -1,0 +1,10 @@
+{
+  "Nodes": 894,
+  "Edges": 13668,
+  "Num_WCCs": 6,
+  "Giant_WCC_size": 870,
+  "Giant_WCC_fraction": 0.973154,
+  "Num_SCCs": 47,
+  "Giant_SCC_size": 830,
+  "Giant_SCC_fraction": 0.928412
+}
