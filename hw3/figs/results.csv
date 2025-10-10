@@ -1,0 +1,4 @@
+Model,Train RMSE,Train MAE,Train R2,Test RMSE,Test MAE,Test R2
+OLS (subset),4.039,3.02,0.744,3.761,2.898,0.723
+Ridge (alpha=12.6),3.786,2.793,0.775,3.493,2.682,0.761
+LASSO (alpha=0.0122),3.772,2.788,0.776,3.477,2.648,0.763

@@ -1,0 +1,23 @@
+Top-10 Hubs:
+ 1. ORD (Chicago, IL)              hub=0.027042
+ 2. DEN (Denver, CO)               hub=0.0204967
+ 3. LAX (Los Angeles, CA)          hub=0.0180309
+ 4. ATL (Atlanta, GA)              hub=0.0174079
+ 5. MSP (Minneapolis, MN)          hub=0.0165511
+ 6. DTW (Detroit, MI)              hub=0.0164789
+ 7. IAH (Houston, TX)              hub=0.016124
+ 8. PHL (Philadelphia, PA)         hub=0.0157302
+ 9. EWR (Newark, NJ)               hub=0.0152595
+10. LAS (Las Vegas, NV)            hub=0.0148805
+
+Top-10 Authorities:
+ 1. ORD (Chicago, IL)              auth=0.0264634
+ 2. DEN (Denver, CO)               auth=0.0208739
+ 3. LAX (Los Angeles, CA)          auth=0.0176364
+ 4. ATL (Atlanta, GA)              auth=0.0173337
+ 5. IAH (Houston, TX)              auth=0.0161291
+ 6. PHL (Philadelphia, PA)         auth=0.0160071
+ 7. MSP (Minneapolis, MN)          auth=0.015975
+ 8. DTW (Detroit, MI)              auth=0.0158793
+ 9. EWR (Newark, NJ)               auth=0.0154375
+10. CVG (Cincinnati, KY)           auth=0.0152181

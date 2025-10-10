@@ -1,0 +1,10 @@
+ 1. ORD (Chicago, IL)               PR=0.0212609
+ 2. DEN (Denver, CO)                PR=0.0188821
+ 3. ANC (Anchorage, AK)             PR=0.0147064
+ 4. DFW (Dallas/Fort Worth, TX)     PR=0.0145494
+ 5. ATL (Atlanta, GA)               PR=0.0126399
+ 6. BET (Bethel, AK)                PR=0.0115335
+ 7. FAI (Fairbanks, AK)             PR=0.0114696
+ 8. LAX (Los Angeles, CA)           PR=0.0110461
+ 9. IAH (Houston, TX)               PR=0.0106343
+10. MSP (Minneapolis, MN)           PR=0.0104053
